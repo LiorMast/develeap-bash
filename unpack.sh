@@ -46,28 +46,90 @@ ensure_dependency "uncompress" "ncompress"
 decompress_file() {
     local file="$1"
     local file_type=$(file -b --mime-type "$file")
+    local file_name=$(basename "$file")
+    
+    # Check if file exists
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+
     case "$file_type" in
         application/gzip | application/x-gzip)
-            [[ $verbose == true ]] && echo "Unpacking $file..."
-            gunzip "$file"
+            [[ $verbose == true ]] && echo "Unpacking $file_name..."
+            # -f: force overwrite, -k: keep input file
+            if gunzip -f -k "$file" 2>/dev/null; then
+                return 0
+            else
+                return 1
+            fi
             ;;
         application/x-bzip2)
-            [[ $verbose == true ]] && echo "Unpacking $file..."
-            bunzip2 "$file"
+            [[ $verbose == true ]] && echo "Unpacking $file_name..."
+            # -f: force overwrite, -k: keep input file
+            if bunzip2 -f -k "$file" > "${file%.bz2}" 2>/dev/null; then
+                return 0
+            else
+                return 1
+            fi
             ;;
         application/zip)
-            [[ $verbose == true ]] && echo "Unpacking $file..."
-            unzip -q "$file"
+            [[ $verbose == true ]] && echo "Unpacking $file_name..."
+            # -o: overwrite without prompting
+            # -d: extract to the file's directory
+            if unzip -o -q "$file" -d "$(dirname "$file")" 2>/dev/null; then
+                return 0
+            else
+                return 1
+            fi
             ;;
         application/x-compress)
-            [[ $verbose == true ]] && echo "Unpacking $file..."
-            uncompress "$file"
+            [[ $verbose == true ]] && echo "Unpacking $file_name..."
+            # Check if uncompress supports -f and -k (depends on implementation)
+            # Standard uncompress often replaces. To keep original and overwrite:
+            # We output to stdout and redirect to target file.
+            local target="${file%.Z}"
+            if uncompress -c "$file" > "$target" 2>/dev/null; then
+                return 0
+            else
+                return 1
+            fi
             ;;
         *)
-            [[ $verbose == true ]] && echo "Ignoring $file"
+            # According to specs: "Warn for each file that was NOT decompressed" is handled by verbose check here?
+            # Actually, "Warn for each file that was NOT decompressed" is usually for -v.
+            # But "Uncompressed files: Take no action"
+            [[ $verbose == true ]] && echo "Ignoring $file_name"
+            return 1
             ;;
     esac
     # return $decompressed_count
+}
+
+traverse_dir() {
+    local dir="$1"
+    
+    # Enable nullglob to handle empty directories correctly
+    local shopt_nullglob=$(shopt -p nullglob)
+    shopt -s nullglob
+    local files=("$dir"/*) #if nullglob is not set, this could result in an error if the directory is empty because the glob expansion fails
+    $shopt_nullglob
+    
+    for item in "${files[@]}"; do
+        if [[ -d "$item" ]]; then
+            if [[ $recursive == true ]]; then
+                traverse_dir "$item"
+            fi
+        elif [[ -f "$item" ]]; then
+            if decompress_file "$item"; then
+                decompressed_count=$((decompressed_count + 1))
+            else
+                fail_count=$((fail_count + 1))
+            fi
+        else
+            # Count non-files/non-dirs as failures
+            fail_count=$((fail_count + 1))
+        fi
+    done
 }
 
 while [[ $1 =~ ^-.*$ ]] ; do
@@ -105,17 +167,28 @@ for file in "$@"; do
             fail_count=$((fail_count + 1))
         fi
     elif [[ -d "$file" ]]; then
-        if [[ $verbose = true ]]; then
-            echo "$file is a directory"
-        fi
+        # "Directory input: Decompress all files in that directory (one level deep without -r)"
+        # But wait, looking at "Directory input: Decompress all files in that directory (one level deep without -r)"
+        # And "Recursive Directory Handling ... Processed some-folder and all subfolders"
         
+        # My traverse_dir handles recursion if $recursive is true.
+        # But if $recursive is false, traverse_dir ONLY iterates the current dir?
+        # My traverse_dir implementation:
+        # if [[ -d "$item" ]]; then if [[ $recursive == true ]]; then traverse_dir ...
+        # So yes, it handles the "one level deep without -r" automatically by NOT recursing.
+        
+        traverse_dir "$file"
     else
+        # Argument that is neither file nor directory (e.g. invalid path)
+        # Should we count this as fail?
+        # "Exit code: Return the exact number of files NOT decompressed"
+        [[ $verbose == true ]] && echo "Ignoring $file"
         fail_count=$((fail_count + 1))
     fi
 done
 
 
-echo "Decompressed $decompressed_count files"
+echo "Decompressed $decompressed_count archive(s)"
 
 
 exit $fail_count
