@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script Name: unpack.sh [cite: 17, 85]
-# Synopsis: unpack [-r] [-v] file [files...] [cite: 19]
+# Script Name: unpack.sh
+# Synopsis: unpack [-r] [-v] file [files...]
 # Description: Handles multiple compressed files, traverses directories, 
 # detects types automatically, and maintains original archives.
+# Includes automatic dependency detection and installation.
 # ==============================================================================
 
 # --- Global Variables ---
@@ -13,28 +14,75 @@ RECURSIVE=false
 DECOMPRESSED_COUNT=0
 FAILED_COUNT=0
 
-# --- Argument Parsing [cite: 31] ---
+# --- Dependency Management ---
+
+# Function: ensure_dependency
+# Purpose: Checks if a command exists; if not, attempts to install the package.
+ensure_dependency() {
+    local cmd_name="$1"
+    local pkg_name="$2"
+
+    # echo "Checking for dependency: '$cmd_name' for package '$pkg_name'"
+
+
+    if ! command -v "$cmd_name" &> /dev/null; then
+        echo "Missing required dependency: '$cmd_name'. Attempting to install package '$pkg_name'..."
+        
+        # Check if user has sudo privileges or is root
+        if [ "$EUID" -ne 0 ] && ! command -v sudo &> /dev/null; then
+            echo "Error: Cannot install '$pkg_name'. Please run as root or install sudo." >&2
+            exit 1
+        fi
+
+        # Attempt installation
+        # We use -y to automatically say yes to prompts
+        if ! sudo apt-get update -qq || ! sudo apt-get install -y "$pkg_name" &> /dev/null; then
+            echo "Error: Failed to install '$pkg_name'. Please install it manually." >&2
+            exit 1
+        fi
+    fi
+}
+
+# Check all required tools before processing arguments
+# Format: ensure_dependency "command_to_check" "package_to_install"
+ensure_dependency "file" "file"
+ensure_dependency "gunzip" "gzip"
+ensure_dependency "bunzip2" "bzip2"
+ensure_dependency "unzip" "unzip"
+ensure_dependency "uncompress" "ncompress" # 'uncompress' is usually provided by 'ncompress' on Ubuntu
+
+# --- Argument Parsing ---
 # Parse command line options -r and -v
-while getopts ":rv" opt; do
-  case ${opt} in
-    r)
-      RECURSIVE=true # Traverse directories recursively 
-      ;;
-    v)
-      VERBOSE=true   # Echo file details and warnings [cite: 33]
-      ;;
-    \?)
-      echo "Invalid option: -$OPTARG" >&2
-      exit 1
-      ;;
-  esac
+
+while [[ $1 =~ ^-.*$ ]] ; do
+    echo "$1"
+    case $1 in
+        -v)
+            verbose=true
+            echo "Verbose mode enabled"
+            ;;
+        -r)
+            recursive=true
+            echo "Recursive mode enabled"
+            ;;
+        -vr|-rv)
+            verbose=true
+            recursive=true
+            echo "Verbose and recursive mode enabled"
+            ;;
+        -*)
+            echo "Invalid option: $1" >&2
+            exit 1
+            ;;
+
+    esac
+    shift
 done
-shift $((OPTIND -1)) # Shift positional arguments to access files
 
 # --- Functions ---
 
 # Function: unpack_file
-# Purpose: Detects file type and attempts decompression 
+# Purpose: Detects file type and attempts decompression [cite: 21]
 unpack_file() {
     local file_path="$1"
     local dir_path
@@ -42,39 +90,39 @@ unpack_file() {
     local filename
     filename=$(basename "$file_path")
     
-    # 1. Parse 'file' command output to detect compression type 
-    # ignoring extensions 
+    # 1. Parse 'file' command output to detect compression type
+    # ignoring extensions [cite: 39]
     local file_type
-    file_type=$(file -b "$file_path")
+    file_type=$(file -b --mime-type "$file_path")
     
     local unpacked=false
 
-    # 2. Choose decompression method [cite: 22, 25]
+    # 2. Choose decompression method [cite: 22]
     # Design allows simple addition of new formats [cite: 30]
     case "$file_type" in
-        *"gzip compressed data"*)
-            # [cite: 26] gunzip: -k (keep original), -f (overwrite)
+        application/gzip | application/x-gzip)
+            # gunzip: -k (keep original), -f (overwrite) [cite: 26, 22, 23]
             if gunzip -k -f "$file_path" 2>/dev/null; then
                 unpacked=true
             fi
             ;;
-        *"bzip2 compressed data"*)
-            # [cite: 27] bunzip2: -k (keep original), -f (overwrite)
+        application/x-bzip2)
+            # bunzip2: -k (keep original), -f (overwrite) [cite: 27, 22, 23]
             if bunzip2 -k -f "$file_path" 2>/dev/null; then
                 unpacked=true
             fi
             ;;
-        *"Zip archive data"*)
-            # [cite: 28] unzip: -o (overwrite), -d (destination dir)
-            # Extracts to same directory 
+        application/zip)
+            # unzip: -o (overwrite), -d (destination dir)
+            # Extracts to same directory [cite: 28, 22]
             if unzip -o -q "$file_path" -d "$dir_path" 2>/dev/null; then
                 unpacked=true
             fi
             ;;
-        *"compress'd data"*)
-            # [cite: 29] uncompress
+        application/x-compress)
+            # uncompress [cite: 29]
             # Standard uncompress replaces files, so we use -c and redirection 
-            # to satisfy "Keep original"  and "Overwrite".
+            # to satisfy "Keep original" and "Overwrite".
             # We strip the extension for the output name.
             local out_name="${file_path%.*}"
             # Logic to prevent overwriting the source if it lacks an extension
@@ -95,19 +143,19 @@ unpack_file() {
     if [ "$unpacked" = true ]; then
         ((DECOMPRESSED_COUNT++))
         if [ "$VERBOSE" = true ]; then
-             echo "Unpacking $filename..." # [cite: 35, 59]
+             echo "Unpacking $filename..." # [cite: 59]
         fi
     else
-        # Count files NOT decompressed 
+        # Count files NOT decompressed [cite: 41]
         ((FAILED_COUNT++))
         if [ "$VERBOSE" = true ]; then
-            echo "Ignoring $filename" # [cite: 35, 60]
+            echo "Ignoring $filename" # [cite: 60]
         fi
     fi
 }
 
 # Function: traverse
-# Purpose: Handles directory recursion and file processing logic
+# Purpose: Handles directory recursion and file processing logic [cite: 17, 37]
 traverse() {
     local path="$1"
     local is_root_arg="$2" # "true" if this was passed directly by user
@@ -119,15 +167,14 @@ traverse() {
     elif [ -d "$path" ]; then
         # It's a directory
         # Logic: Directory input: Decompress all files in that directory 
-        # (one level deep without -r) 
+        # (one level deep without -r) [cite: 40]
         
         # We process children if:
         # 1. We are at the root argument (regardless of -r)
-        # 2. OR if RECURSIVE is true (subfolders) [cite: 37]
+        # 2. OR if RECURSIVE is true (subfolders) [cite: 36]
         
         if [ "$is_root_arg" = true ] || [ "$RECURSIVE" = true ]; then
             # Loop through contents
-            # We use finding to handle space safety and strict file separation
             for item in "$path"/*; do
                 # Check if glob expansion failed (empty directory)
                 [ -e "$item" ] || continue
@@ -150,13 +197,13 @@ traverse() {
 
 # --- Main Execution ---
 
-# Iterate over all provided arguments
+# Iterate over all provided arguments [cite: 19]
 for arg in "$@"; do
     traverse "$arg" "true"
 done
 
-# Output: Echo amount of decompressed files 
+# Output: Echo amount of decompressed files [cite: 40]
 echo "Decompressed $DECOMPRESSED_COUNT archive(s)"
 
-# Exit code: Return exact number of files NOT decompressed 
+# Exit code: Return exact number of files NOT decompressed [cite: 41]
 exit $FAILED_COUNT
