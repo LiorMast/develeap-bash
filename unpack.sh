@@ -42,6 +42,30 @@ ensure_dependency "bunzip2" "bzip2"
 ensure_dependency "unzip" "unzip"
 ensure_dependency "uncompress" "ncompress"
 
+get_output_name() {
+    local file="$1"
+    local base=$(basename "$file")
+    local dir=$(dirname "$file")
+    
+    # Handle compound extensions first
+    if [[ "$base" == *.tgz || "$base" == *.taz ]]; then
+        echo "$dir/${base%.*}.tar"
+        return
+    elif [[ "$base" == *.tbz || "$base" == *.tbz2 ]]; then
+        echo "$dir/${base%.*}.tar"
+        return
+    fi
+    
+    # Handle standard extension removal
+    local name="${base%.*}"
+    if [[ "$name" != "$base" ]]; then
+        echo "$dir/$name"
+    else
+        # No extension (or unknown), append .out
+        echo "$dir/$base.out"
+    fi
+}
+
 
 decompress_file() {
     local file="$1"
@@ -56,19 +80,23 @@ decompress_file() {
     case "$file_type" in
         application/gzip | application/x-gzip)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
-            # -f: force overwrite, -k: keep input file
-            if gunzip -f -k "$file" 2>/dev/null; then
+            local target=$(get_output_name "$file")
+            # Use -c to write to stdout and redirect to target, avoiding suffix issues
+            if gunzip -c "$file" > "$target"; then
                 return 0
             else
+                rm -f "$target" # Cleanup on failure (e.g. valid empty file created before error)
                 return 1
             fi
             ;;
         application/x-bzip2)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
-            # -f: force overwrite, -k: keep input file
-            if bunzip2 -f -k "$file" > "${file%.bz2}" 2>/dev/null; then
+            local target=$(get_output_name "$file")
+            # Use -c to avoid "Can't guess original name" and allow explicit target
+            if bunzip2 -c "$file" > "$target"; then
                 return 0
             else
+                rm -f "$target"
                 return 1
             fi
             ;;
@@ -76,7 +104,7 @@ decompress_file() {
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
             # -o: overwrite without prompting
             # -d: extract to the file's directory
-            if unzip -o -q "$file" -d "$(dirname "$file")" 2>/dev/null; then
+            if unzip -o -q "$file" -d "$(dirname "$file")"; then
                 return 0
             else
                 return 1
@@ -84,13 +112,11 @@ decompress_file() {
             ;;
         application/x-compress)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
-            # Check if uncompress supports -f and -k (depends on implementation)
-            # Standard uncompress often replaces. To keep original and overwrite:
-            # We output to stdout and redirect to target file.
-            local target="${file%.Z}"
-            if uncompress -c "$file" > "$target" 2>/dev/null; then
+            local target=$(get_output_name "$file")
+            if uncompress -c "$file" > "$target"; then
                 return 0
             else
+                rm -f "$target"
                 return 1
             fi
             ;;
