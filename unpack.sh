@@ -40,7 +40,7 @@ ensure_dependency "file" "file"
 ensure_dependency "gunzip" "gzip"
 ensure_dependency "bunzip2" "bzip2"
 ensure_dependency "unzip" "unzip"
-ensure_dependency "uncompress" "ncompress"
+
 
 get_output_name() {
     local file="$1"
@@ -48,13 +48,13 @@ get_output_name() {
     local dir=$(dirname "$file")
     
     # Handle compound extensions first
-    if [[ "$base" == *.tgz || "$base" == *.taz ]]; then
-        echo "$dir/${base%.*}.tar"
-        return
-    elif [[ "$base" == *.tbz || "$base" == *.tbz2 ]]; then
-        echo "$dir/${base%.*}.tar"
-        return
-    fi
+    # if [[ "$base" == *.tgz || "$base" == *.taz ]]; then
+    #     echo "$dir/${base%.*}.tar"
+    #     return
+    # elif [[ "$base" == *.tbz || "$base" == *.tbz2 ]]; then
+    #     echo "$dir/${base%.*}.tar"
+    #     return
+    # fi
     
     # Handle standard extension removal
     local name="${base%.*}"
@@ -77,22 +77,35 @@ decompress_file() {
         return 1
     fi
 
+    # Special handling for tar archives (by extension or mime)
+    if [[ "$file_name" == *.tar || "$file_type" == "application/x-tar" ]]; then
+         [[ $verbose == true ]] && echo "Unpacking $file_name (tar)..."
+         tar -xf "$file" -C "$(dirname "$file")"
+         return $?
+    fi
+
+    # Check for compressed tar archives by extension logic BEFORE generic mime handling
+    # If the file extension suggests a tarball, try tar first.
+    if [[ "$file_name" =~ \.(tar\.gz|tgz|tar\.bz2|tbz|tbz2)$ ]]; then
+        [[ $verbose == true ]] && echo "Unpacking $file_name (tar)..."
+        tar -xf "$file" -C "$(dirname "$file")"
+        return $?
+    fi
+
     case "$file_type" in
         application/gzip | application/x-gzip)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
             local target=$(get_output_name "$file")
-            # Use -c to write to stdout and redirect to target, avoiding suffix issues
             if gunzip -c "$file" > "$target"; then
                 return 0
             else
-                rm -f "$target" # Cleanup on failure (e.g. valid empty file created before error)
+                rm -f "$target"
                 return 1
             fi
             ;;
         application/x-bzip2)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
             local target=$(get_output_name "$file")
-            # Use -c to avoid "Can't guess original name" and allow explicit target
             if bunzip2 -c "$file" > "$target"; then
                 return 0
             else
@@ -102,8 +115,6 @@ decompress_file() {
             ;;
         application/zip)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
-            # -o: overwrite without prompting
-            # -d: extract to the file's directory
             if unzip -o -q "$file" -d "$(dirname "$file")"; then
                 return 0
             else
@@ -113,7 +124,8 @@ decompress_file() {
         application/x-compress)
             [[ $verbose == true ]] && echo "Unpacking $file_name..."
             local target=$(get_output_name "$file")
-            if uncompress -c "$file" > "$target"; then
+            # Use gzip -dc instead of uncompress
+            if gzip -dc "$file" > "$target"; then
                 return 0
             else
                 rm -f "$target"
@@ -121,9 +133,6 @@ decompress_file() {
             fi
             ;;
         *)
-            # According to specs: "Warn for each file that was NOT decompressed" is handled by verbose check here?
-            # Actually, "Warn for each file that was NOT decompressed" is usually for -v.
-            # But "Uncompressed files: Take no action"
             [[ $verbose == true ]] && echo "Ignoring $file_name"
             return 1
             ;;

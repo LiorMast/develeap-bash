@@ -1,45 +1,35 @@
 #!/bin/bash
 
 # Setup
-TEST_DIR="test_unpack_env"
-mkdir -p "$TEST_DIR"
-mkdir -p "$TEST_DIR/sub1"
-mkdir -p "$TEST_DIR/sub1/sub2"
+mkdir -p verification_test
+cd verification_test
 
-# Create dummy files
-touch "$TEST_DIR/file.txt"
-echo "content" > "$TEST_DIR/test1.txt"
-gzip -c "$TEST_DIR/test1.txt" > "$TEST_DIR/test1.txt.gz"
-rm "$TEST_DIR/test1.txt"
+# 1. Test single files (mimic test3/morefiles)
+echo "file1" > f1.txt
+bzip2 -k f1.txt
+mv f1.txt.bz2 "1 RnM"
 
-echo "content2" > "$TEST_DIR/sub1/test2.txt"
-gzip -c "$TEST_DIR/sub1/test2.txt" > "$TEST_DIR/sub1/test2.txt.gz"
-rm "$TEST_DIR/sub1/test2.txt"
+echo "file2" > f2.txt
+compress -f f2.txt
+mv f2.txt.Z "2 s2"
 
-echo "content3" > "$TEST_DIR/sub1/sub2/test3.txt"
-gzip -c "$TEST_DIR/sub1/sub2/test3.txt" > "$TEST_DIR/sub1/sub2/test3.txt.gz"
-rm "$TEST_DIR/sub1/sub2/test3.txt"
+echo "file3" > f3.txt
+zip -q "3 e5" f3.txt
 
-echo "--- Test 1: unpack directory non-recursive ---"
-./unpack.sh -v "$TEST_DIR"
-ls -R "$TEST_DIR"
-if [[ -f "$TEST_DIR/test1.txt" ]] && [[ ! -f "$TEST_DIR/sub1/test2.txt" ]]; then
-    echo "PASS: Top level unpacked, subdirs ignored"
-else
-    echo "FAIL: Top level not unpacked or subdirs unpacked unexpectedly"
-fi
+echo "file4" > f4.txt
+gzip -c f4.txt > "4 0037"
 
-# Clean up for next test
-rm "$TEST_DIR/test1.txt"
-rm -f "$TEST_DIR/sub1/test2.txt"
+# 2. Test archives (should use tar)
+mkdir tar_content
+echo "tar_file" > tar_content/tf.txt
+tar -cf archive.tar tar_content
+tar -czf archive.tar.gz tar_content
+tar -cjf archive.tar.bz2 tar_content
+mv archive.tar.gz archive.tgz
+mv archive.tar.bz2 archive.tbz
 
-echo "--- Test 2: unpack directory recursive ---"
-./unpack.sh -v -r "$TEST_DIR"
-if [[ -f "$TEST_DIR/test1.txt" ]] && [[ -f "$TEST_DIR/sub1/test2.txt" ]] && [[ -f "$TEST_DIR/sub1/sub2/test3.txt" ]]; then
-    echo "PASS: All levels unpacked"
-else
-    echo "FAIL: Recursion failed"
-    [[ -f "$TEST_DIR/test1.txt" ]] || echo "  Missing level 1"
-    [[ -f "$TEST_DIR/sub1/test2.txt" ]] || echo "  Missing level 2"
-    [[ -f "$TEST_DIR/sub1/sub2/test3.txt" ]] || echo "  Missing level 3"
-fi
+echo "--- Running unpack.sh ---"
+../unpack.sh -v .
+
+echo "--- Verification ---"
+ls -R
